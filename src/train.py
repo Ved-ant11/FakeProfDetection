@@ -4,61 +4,54 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, f1_score
+from imblearn.over_sampling import SMOTE
 import joblib
 import os
 
 def train_models():
-    # Load dataset
-    data_path = 'data/raw/dataset.csv'
+    data_path = 'data/processed/research_data.csv'
     if not os.path.exists(data_path):
-        print(f"Error: {data_path} not found. Run generate_data.py first.")
+        print("Run src/process_data.py first!")
         return
 
     df = pd.read_csv(data_path)
-    
-    # Feature selection
-    X = df.drop(['fake'], axis=1)
+    X = df.drop('fake', axis=1)
     y = df['fake']
-    
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Save test data for potential later verification
-    test_df = pd.concat([X_test, y_test], axis=1)
-    os.makedirs('data/processed', exist_ok=True)
-    test_df.to_csv('data/processed/test_data.csv', index=False)
 
-    # Preprocessing
+    # 1. Split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # 2. Apply SMOTE (Research Requirement)
+    print(f"Original Training Balance: {y_train.value_counts().to_dict()}")
+    smote = SMOTE(random_state=42)
+    X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+    print(f"SMOTE Balanced Balance: {y_train_res.value_counts().to_dict()}")
+
+    # 3. Scaling
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_train_scaled = scaler.fit_transform(X_train_res)
     X_test_scaled = scaler.transform(X_test)
     
     os.makedirs('models', exist_ok=True)
     joblib.dump(scaler, 'models/scaler.pkl')
-    print("Scaler saved to models/scaler.pkl")
 
+    # 4. Train Random Forest (Ensemble)
     print("\nTraining Random Forest...")
-    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-    rf_model.fit(X_train, y_train) # RF works fine without scaling
-    
-    y_pred_rf = rf_model.predict(X_test)
-    print("Random Forest Accuracy:", accuracy_score(y_test, y_pred_rf))
-    print(classification_report(y_test, y_pred_rf))
-    
-    joblib.dump(rf_model, 'models/rf_model.pkl')
-    print("Random Forest model saved to models/rf_model.pkl")
+    rf = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf.fit(X_train_res, y_train_res)
+    print(f"RF F1 Score: {f1_score(y_test, rf.predict(X_test)):.4f}")
+    joblib.dump(rf, 'models/rf_model.pkl')
 
-    print("\nTraining SVM...")
-    svm_model = SVC(kernel='rbf', probability=True, random_state=42)
-    svm_model.fit(X_train_scaled, y_train) # SVM needs scaling
+    # 5. Train SVM
+    print("Training SVM...")
+    svm = SVC(kernel='rbf', probability=True, random_state=42)
+    svm.fit(X_train_scaled, y_train_res)
+    print(f"SVM F1 Score: {f1_score(y_test, svm.predict(X_test_scaled)):.4f}")
+    joblib.dump(svm, 'models/svm_model.pkl')
     
-    y_pred_svm = svm_model.predict(X_test_scaled)
-    print("SVM Accuracy:", accuracy_score(y_test, y_pred_svm))
-    print(classification_report(y_test, y_pred_svm))
-    
-    joblib.dump(svm_model, 'models/svm_model.pkl')
-    print("SVM model saved to models/svm_model.pkl")
+    # Save test data for SHAP in App
+    X_test.to_csv('data/processed/X_test.csv', index=False)
 
 if __name__ == "__main__":
     train_models()

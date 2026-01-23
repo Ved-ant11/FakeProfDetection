@@ -2,117 +2,147 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import os
+import math
+import shap
+import matplotlib.pyplot as plt
+import streamlit.components.v1 as components
 
-# Set page config
-st.set_page_config(page_title="Fake Profile Detector", layout="wide")
+# ---------------- CONFIG ----------------
+st.set_page_config(page_title="BotX-Ray Detector", layout="wide")
 
+# ---------------- MODEL LOADING ----------------
 @st.cache_resource
-def load_models():
-    # Check if models exist
-    if not os.path.exists('models/scaler.pkl'):
+def load_assets():
+    try:
+        scaler = joblib.load("models/scaler.pkl")
+        svm = joblib.load("models/svm_model.pkl")
+        rf = joblib.load("models/rf_model.pkl")
+        return scaler, svm, rf
+    except Exception as e:
+        st.error(f"❌ Error loading models: {e}")
         return None, None, None
-    
-    scaler = joblib.load('models/scaler.pkl')
-    svm = joblib.load('models/svm_model.pkl')
-    rf = joblib.load('models/rf_model.pkl')
-    return scaler, svm, rf
 
-scaler, svm_model, rf_model = load_models()
+# ---------------- SHAP RENDERER ----------------
+def st_shap(plot, height=400):
+    shap_html = f"""
+    <head>{shap.getjs()}</head>
+    <body>{plot.html()}</body>
+    """
+    components.html(shap_html, height=height)
 
-st.title("Fake Social Media Profile Detection")
-st.markdown("Use Machine Learning to determine if a profile is **Real** or **Fake**.")
+# ---------------- FEATURE ENGINEERING ----------------
+def calculate_entropy(text):
+    if not text:
+        return 0.0
+    text = str(text).lower()
+    probs = [text.count(c) / len(text) for c in set(text)]
+    return -sum(p * math.log2(p) for p in probs if p > 0)
 
-if scaler is None:
-    st.error("Models not found! Please run the training script first.")
-    st.info("Run: `python src/train.py`")
-else:
-    # Sidebar for classifier selection
-    st.sidebar.header("Configuration")
-    model_choice = st.sidebar.selectbox("Choose Model", ["Random Forest", "SVM"])
-    
-    st.subheader("Profile Features")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        profile_pic = st.selectbox("Has Profile Picture?", ["Yes", "No"])
-        nums_length_username = st.slider("Ratio of Numbers in Username", 0.0, 1.0, 0.0)
-        fullname_words = st.number_input("Words in Full Name", min_value=0, value=2)
-        nums_length_fullname = st.slider("Ratio of Numbers in Full Name", 0.0, 1.0, 0.0)
-        
-    with col2:
-        name_username_match = st.selectbox("Name & Username Similar?", ["Yes", "No"])
-        description_length = st.number_input("Bio Length (chars)", min_value=0, value=50)
-        external_url = st.selectbox("Has External URL?", ["Yes", "No"])
-        private = st.selectbox("Private Profile?", ["Yes", "No"])
-        
-    with col3:
-        posts = st.number_input("Number of Posts", min_value=0, value=50)
-        followers = st.number_input("Followers", min_value=0, value=200)
-        follows = st.number_input("Following", min_value=0, value=200)
+# Load assets
+scaler, svm_model, rf_model = load_assets()
 
-    # Convert inputs to model format
-    input_data = {
-        'profile_pic': 1 if profile_pic == "Yes" else 0,
-        'nums_length_username': nums_length_username,
-        'fullname_words': fullname_words,
-        'nums_length_fullname': nums_length_fullname,
-        'name_username_match': 1 if name_username_match == "Yes" else 0,
-        'description_length': description_length,
-        'external_url': 1 if external_url == "Yes" else 0,
-        'private': 1 if private == "Yes" else 0,
-        'posts': posts,
-        'followers': followers,
-        'follows': follows
-    }
-    
-    if st.button("Analyze Profile", type="primary"):
-        # Create DataFrame
-        df = pd.DataFrame([input_data])
-        
-        # Scaling
-        # SVM needs scaling, RF doesn't hurt.
-        # Note: The scaler was fitted on 11 features. Ensure order matches.
-        # Order in generates_data.py: 
-        # profile_pic, nums_length_username, fullname_words, nums_length_fullname, name_username_match, 
-        # description_length, external_url, private, posts, followers, follows
-        
-        # We must ensure the column order is identical to training
-        cols = ['profile_pic', 'nums_length_username', 'fullname_words', 'nums_length_fullname', 
-                'name_username_match', 'description_length', 'external_url', 'private', 
-                'posts', 'followers', 'follows']
-        df = df[cols]
-        
-        if model_choice == "SVM":
-            X_scaled = scaler.transform(df)
-            prediction = svm_model.predict(X_scaled)[0]
-            prob = svm_model.predict_proba(X_scaled)[0]
-        else:
-            prediction = rf_model.predict(df)[0] # RF trained on raw data? 
-            # Wait, in train.py: `rf_model.fit(X_train, y_train)` - X_train was NOT scaled for RF.
-            # But the scaler is available.
-            # Ideally standard practice is to scale for all, or verify.
-            # In train.py I did: `X_train_scaled` for SVM, `X_train` for RF.
-            # So for RF here, I should use `df` (unscaled). Correct.
-            
-            prob = rf_model.predict_proba(df)[0]
-            
-        result = "Fake" if prediction == 1 else "Real"
-        color = "red" if prediction == 1 else "green"
-        
-        st.markdown(f"### Prediction: <span style='color:{color}'>{result}</span>", unsafe_allow_html=True)
-        
-        st.write(f"Probability of being Fake: {prob[1]:.2%}")
-        st.write(f"Probability of being Real: {prob[0]:.2%}")
-        
-        # Feature importance for RF
-        if model_choice == "Random Forest":
+# ---------------- UI ----------------
+st.title("🛡️ BotX-Ray: Explainable Fake Profile Detection")
+st.markdown("Explainable **Fake Profile Detection** using **Entropy + Behavioral Analysis**")
+
+if scaler is None or svm_model is None or rf_model is None:
+    st.error("Models not found. Ensure the 'models' folder exists with .pkl files.")
+    st.stop()
+
+# ---------------- SIDEBAR ----------------
+st.sidebar.header("Profile Metadata")
+screen_name = st.sidebar.text_input("Screen Name (Handle)", "user12345678")
+
+col1, col2 = st.sidebar.columns(2)
+followers = col1.number_input("Followers", min_value=0, value=10)
+friends = col2.number_input("Following", min_value=0, value=500)
+
+col3, col4 = st.sidebar.columns(2)
+statuses = col3.number_input("Total Tweets", min_value=0, value=50)
+favorites = col4.number_input("Favorites Given", min_value=0, value=0)
+
+account_age = st.sidebar.slider("Account Age (Days)", 1, 3650, 30)
+
+# ---------------- CALCULATION ----------------
+entropy = calculate_entropy(screen_name)
+reputation = followers / (followers + friends + 1)
+engagement = favorites / (statuses + 1)
+tweet_freq = statuses / account_age
+name_len = len(screen_name)
+
+input_data = pd.DataFrame([{
+    "screen_name_entropy": entropy,
+    "name_len": name_len,
+    "reputation_score": reputation,
+    "engagement_rate": engagement,
+    "account_age_days": account_age,
+    "tweet_freq": tweet_freq
+}])
+
+# ---------------- MAIN LAYOUT ----------------
+left, right = st.columns([1, 2])
+
+with left:
+    st.subheader("Calculated Features")
+    st.metric("Name Entropy", f"{entropy:.2f}")
+    st.metric("Reputation Score", f"{reputation:.2f}")
+    st.metric("Engagement Rate", f"{engagement:.3f}")
+
+with right:
+    model_choice = st.selectbox("Classifier", ["Random Forest", "SVM"])
+
+    if st.button("Run Detection", type="primary"):
+        try:
+            if model_choice == "SVM":
+                input_scaled = scaler.transform(input_data)
+                pred = svm_model.predict(input_scaled)[0]
+                prob = svm_model.predict_proba(input_scaled)[0]
+            else:
+                pred = rf_model.predict(input_data)[0]
+                prob = rf_model.predict_proba(input_data)[0]
+
+            confidence = prob[1] if pred == 1 else prob[0]
+
+            if pred == 1:
+                st.error(f"🚨 **FAKE PROFILE DETECTED** (Confidence: {confidence:.1%})")
+            else:
+                st.success(f"✅ **REAL PROFILE** (Confidence: {confidence:.1%})")
+
+            # ---------------- SHAP EXPLANATION ----------------
             st.divider()
-            st.subheader("Why?")
-            importances = rf_model.feature_importances_
-            feature_imp = pd.DataFrame({'Feature': cols, 'Importance': importances})
-            feature_imp = feature_imp.sort_values('Importance', ascending=False).head(3)
-            st.write("Top influencing factors:")
-            st.table(feature_imp)
+            st.subheader("🔍 Explainable AI Analysis")
 
+            if model_choice == "Random Forest":
+                with st.spinner("Calculating SHAP values..."):
+                    explainer = shap.TreeExplainer(rf_model)
+                    shap_values = explainer.shap_values(input_data)
+
+                    # Logic to handle different SHAP output formats based on library version
+                    if isinstance(shap_values, list):
+                        # Multi-output: index 1 is usually the 'Fake' class
+                        sv = shap_values[1][0]
+                        ev = explainer.expected_value[1]
+                    elif len(shap_values.shape) == 3:
+                        # 3D array: (samples, features, classes)
+                        sv = shap_values[0, :, 1]
+                        ev = explainer.expected_value[1]
+                    else:
+                        # Standard 2D array
+                        sv = shap_values[0]
+                        ev = explainer.expected_value
+
+                    # Render the force plot
+                    p = shap.force_plot(
+                        ev, 
+                        sv, 
+                        input_data.iloc[0],
+                        matplotlib=False
+                    )
+                    st_shap(p)
+
+            else:
+                st.info("SHAP Analysis is optimized for Random Forest in this preview.")
+
+        except Exception as e:
+            st.error("Prediction failed ❌")
+            st.exception(e)
