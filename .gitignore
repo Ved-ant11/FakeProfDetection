@@ -1,1 +1,18 @@
-requirements.txt
+# Personal / docs
+docs/
+main_vedant.pdf
+
+# Data (too large for GitHub — provide download link in README)
+*.csv.zip
+data/raw/
+data/processed/
+
+# Trained models (regenerable via train.py)
+models/*.pkl
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.pyc
