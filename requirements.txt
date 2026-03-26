@@ -6,3 +6,5 @@ faker
 joblib
 matplotlib
 seaborn
+imbalanced-learn
+shap
